@@ -1,0 +1,45 @@
+# Copyright (c) 2024-2025 Ocean BDX
+# SPDX-License-Identifier: Apache-2.0
+
+ocean/robot_lab:
+  model_name: "policy.pt"
+  num_observations: 69  # 实际训练模型的观测维度，需要与导出模型匹配
+  observations: ["ang_vel", "gravity_vec", "quaternion", "commands", "dof_pos", "dof_vel", "dof_torques", "actions"]
+  observations_history: []  # 0 is the latest observation
+  observations_history_priority: "time"  # "time" or "term" priority
+  clip_obs: 100.0
+  clip_actions_lower: [-100.0, -100.0, -100.0, -100.0, -100.0,   # Left leg: l1,l2,l3,l4,l5
+                       -100.0, -100.0, -100.0, -100.0, -100.0,   # Right leg: r1,r2,r3,r4,r5
+                       -10.0, -10.0, -10.0, -10.0]               # Neck: n1,n2,n3,n4
+  clip_actions_upper: [100.0, 100.0, 100.0, 100.0, 100.0,        # Left leg: l1,l2,l3,l4,l5
+                       100.0, 100.0, 100.0, 100.0, 100.0,        # Right leg: r1,r2,r3,r4,r5
+                       10.0, 10.0, 10.0, 10.0]                   # Neck: n1,n2,n3,n4
+  rl_kp: [35.0, 35.0, 35.0, 35.0, 35.0,      # Left leg (matches Isaac Lab stiffness)
+          35.0, 35.0, 35.0, 35.0, 35.0,      # Right leg (matches Isaac Lab stiffness)
+          8.0, 8.0, 8.0, 8.0]                # Neck (matches Isaac Lab stiffness)
+  rl_kd: [3.0, 3.0, 3.0, 3.0, 3.0,           # Left leg (matches Isaac Lab damping)
+          3.0, 3.0, 3.0, 3.0, 3.0,           # Right leg (matches Isaac Lab damping)
+          2.0, 2.0, 2.0, 2.0]                # Neck (matches Isaac Lab damping)
+  fixed_kp: [40.0, 40.0, 40.0, 40.0, 40.0,   # Left leg (backup control)
+             40.0, 40.0, 40.0, 40.0, 40.0,   # Right leg (backup control)
+             10.0, 10.0, 10.0, 10.0]         # Neck (backup control)
+  fixed_kd: [3.5, 3.5, 3.5, 3.5, 3.5,        # Left leg (backup control)
+             3.5, 3.5, 3.5, 3.5, 3.5,        # Right leg (backup control)
+             2.5, 2.5, 2.5, 2.5]             # Neck (backup control)
+  num_of_dofs: 14
+  action_scale: [0.4, 0.4, 0.4, 0.4, 0.4,  # Left leg (matches Isaac Lab action scale)
+                 0.4, 0.4, 0.4, 0.4, 0.4,  # Right leg (matches Isaac Lab action scale)
+                 0.2, 0.2, 0.2, 0.2]       # Neck (smaller scale for safety)
+  wheel_indices: []
+  lin_vel_scale: 1.0
+  ang_vel_scale: 0.5
+  dof_pos_scale: 1.0
+  dof_vel_scale: 0.05
+  commands_scale: [1.0, 1.0, 1.0]
+  torque_limits: [100.0, 100.0, 100.0, 100.0, 100.0,  # Left leg (matches Isaac Lab effort_limit)
+                  100.0, 100.0, 100.0, 100.0, 100.0,  # Right leg (matches Isaac Lab effort_limit)
+                  10.0, 10.0, 10.0, 10.0]             # Neck (matches Isaac Lab effort_limit)
+  default_dof_pos: [0.0, -0.244, -0.436, 0.270, 0.069,    # Left leg: l1,l2,l3,l4,l5 (standing pose)
+                    0.0, -0.244, -0.436, 0.270, 0.069,    # Right leg: r1,r2,r3,r4,r5 (standing pose)
+                    0.0, 0.0, 0.0, 0.0]                   # Neck: n1,n2,n3,n4 (neutral)
+  joint_mapping: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
