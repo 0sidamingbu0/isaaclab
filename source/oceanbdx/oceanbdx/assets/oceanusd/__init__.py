@@ -83,11 +83,11 @@ OCEAN_ROBOT_CFG = ArticulationCfg(
                 "leg_r1_joint", "leg_r2_joint", "leg_r3_joint",
                 "leg_r4_joint", "leg_r5_joint"
             ],
-            effort_limit=100.0,  # 大幅增加到100Nm确保有足够力量站立
+            effort_limit=50.0,  # 大幅增加到100Nm确保有足够力量站立
             saturation_effort=90.0,
-            velocity_limit=50.0,  # 大幅提高速度限制
-            stiffness=15.0,  # 🔧 进一步降低刚性，使动作更柔顺（从35.0降到25.0）
-            damping=3.0,   # 🔧 增加阻尼，更强抑制振荡（从3.0增到4.0）
+            velocity_limit=15.0,  # 大幅提高速度限制
+            stiffness=30.0,  # 🔧 进一步降低刚性，使动作更柔顺（从35.0降到25.0）
+            damping=2.0,   # 🔧 增加阻尼，更强抑制振荡（从3.0增到4.0）
             friction=0.8,
         ),
         "neck": DCMotorCfg(

@@ -221,8 +221,8 @@ def knee_ground_contact(
     if not hasattr(knee_ground_contact, '_step_count'):
         knee_ground_contact._step_count = 0
     knee_ground_contact._step_count += 1
-    
-    if knee_ground_contact._step_count % 120 == 0:  # Every ~5 seconds at 24Hz
+
+    if knee_ground_contact._step_count % 24 == 0:  # Every ~1 second at 24Hz
         num_terminated = torch.sum(terminate).item()
         if num_terminated > 0:
             max_left = torch.max(left_force_max).item()
