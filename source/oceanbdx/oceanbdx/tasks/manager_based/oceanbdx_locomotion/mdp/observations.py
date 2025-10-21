@@ -190,3 +190,45 @@ def joint_torques_obs(env: ManagerBasedEnv, asset_cfg: SceneEntityCfg = SceneEnt
     # extract the used quantities (to enable type-hinting)
     asset: RigidObject = env.scene[asset_cfg.name]
     return asset.data.applied_torque
+
+
+def gait_phase_observation(env: ManagerBasedEnv, gait_period: float = 0.75) -> torch.Tensor:
+    """Multi-frequency gait phase encoding for cyclic motion representation.
+    
+    Encodes the current time in the gait cycle using multiple frequency sin/cos pairs.
+    This provides the policy with explicit temporal information about where it is in the gait cycle.
+    
+    Args:
+        env: The environment instance.
+        gait_period: Period of one complete gait cycle in seconds (default: 0.75s).
+    
+    Returns:
+        Tensor of shape [num_envs, 6] containing:
+        - [sin(phase), cos(phase)]         : Full cycle (gait_period)
+        - [sin(phase/2), cos(phase/2)]     : Half cycle (gait_period/2)
+        - [sin(phase/4), cos(phase/4)]     : Quarter cycle (gait_period/4)
+    
+    Note:
+        The multi-frequency encoding provides:
+        - Periodic representation (no discontinuity at cycle boundaries)
+        - Multiple timescales (coarse to fine temporal features)
+        - Continuous and differentiable for neural networks
+    """
+    # Calculate time within the current episode
+    motion_time = env.episode_length_buf.float() * env.step_dt  # [num_envs]
+    
+    # Calculate phase angle (0 to 2π over gait_period)
+    # Using π*time/2 for 4-second cycle to match deployment, but scaled by gait_period
+    phase = (2.0 * torch.pi * motion_time) / gait_period  # [num_envs]
+    
+    # Multi-frequency encoding
+    phase_encoding = torch.stack([
+        torch.sin(phase),        # Full frequency
+        torch.cos(phase),
+        torch.sin(phase / 2.0),  # Half frequency
+        torch.cos(phase / 2.0),
+        torch.sin(phase / 4.0),  # Quarter frequency
+        torch.cos(phase / 4.0),
+    ], dim=-1)  # [num_envs, 6]
+    
+    return phase_encoding

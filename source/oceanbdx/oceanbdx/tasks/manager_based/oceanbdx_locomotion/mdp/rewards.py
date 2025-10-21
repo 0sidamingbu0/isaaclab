@@ -1083,3 +1083,123 @@ def track_base_height_exp(env: ManagerBasedRLEnv,
     
     # return exponential reward (higher reward for smaller error)
     return torch.exp(-height_error / std**2)
+
+
+def gait_phase_reward(env: ManagerBasedRLEnv,
+                      gait_period: float = 0.75,
+                      std: float = 0.5,
+                      asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """Reward for following reference gait trajectory.
+    
+    Args:
+        env: The RL environment.
+        gait_period: Period of the reference gait cycle in seconds (default: 0.75s).
+        std: Standard deviation for exponential kernel (default: 0.5 rad).
+        asset_cfg: Asset configuration.
+    
+    Returns:
+        Exponential reward based on joint angle tracking error.
+    """
+    # Reference gait trajectory: 18 keyframes x 10 leg joints (degrees)
+    # Joint order: L1, L2, L3, L4, L5, R1, R2, R3, R4, R5
+    # Time interval: 0.0417s (approximately 24Hz sampling)
+    reference_gait_deg = torch.tensor([
+        [0, -15, -45, 0, 60, 0, 15, 45, 0, -60],
+        [0, -10.6, -37.5, -7.5, 52.5, 0, 17.3, 48.8, 3.8, -60],
+        [0, -6.2, -30, -15, 45, 0, 19.6, 52.5, 7.5, -60],
+        [0, -1.9, -22.5, -22.5, 37.5, 0, 21.9, 56.2, 11.2, -60],
+        [0, 2.5, -15, -30, 30, 0, 24.2, 60, 15, -60],
+        [0, 6.9, -7.5, -37.5, 22.5, 0, 17.3, 48.8, 3.8, -45],
+        [0, 11.2, 0, -45, 15, 0, 10.4, 37.5, -7.5, -30],
+        [0, 15.6, 7.5, -52.5, 7.5, 0, 3.5, 26.2, -18.8, -15],
+        [0, 20, 15, -60, 0, 0, -3.5, 15, -30, 0],
+        [0, 17.3, 18.8, -52.5, -3.8, 0, -6.2, 7.5, -22.5, 15],
+        [0, 14.6, 22.5, -45, -7.5, 0, -8.8, 0, -15, 30],
+        [0, 11.9, 26.2, -37.5, -11.2, 0, -11.5, -7.5, -7.5, 45],
+        [0, 9.2, 30, -30, -15, 0, -14.2, -15, 0, 60],
+        [0, 12.7, 33.8, -22.5, -18.8, 0, -10.4, -7.5, 7.5, 52.5],
+        [0, 16.2, 37.5, -15, -22.5, 0, -6.5, 0, 15, 45],
+        [0, 19.6, 41.2, -7.5, -26.2, 0, -2.7, 7.5, 22.5, 37.5],
+        [0, 23.1, 45, 0, -30, 0, 1.2, 15, 30, 30],
+        [0, 11.5, 15, 0, 7.5, 0, 8.1, 30, 15, -7.5]
+    ], device=env.device, dtype=torch.float32)
+    
+    # Convert reference from degrees to radians
+    reference_gait_rad = reference_gait_deg * (torch.pi / 180.0)
+    
+    # Extract the asset
+    asset: Articulation = env.scene[asset_cfg.name]
+    
+    # Get leg joint indices (cache them on first call)
+    if not hasattr(gait_phase_reward, '_leg_joint_indices'):
+        joint_names = asset.data.joint_names
+        leg_joints = ["leg_l1_joint", "leg_l2_joint", "leg_l3_joint", "leg_l4_joint", "leg_l5_joint",
+                      "leg_r1_joint", "leg_r2_joint", "leg_r3_joint", "leg_r4_joint", "leg_r5_joint"]
+        
+        leg_indices = []
+        for target_joint in leg_joints:
+            for i, name in enumerate(joint_names):
+                if name == target_joint:
+                    leg_indices.append(i)
+                    break
+        
+        if len(leg_indices) != 10:
+            print(f"⚠️  WARNING: Found only {len(leg_indices)} leg joints, expected 10!")
+            print(f"Available joints: {joint_names}")
+            print(f"Found indices: {leg_indices}")
+        
+        gait_phase_reward._leg_joint_indices = torch.tensor(leg_indices, device=env.device, dtype=torch.long)
+        gait_phase_reward._initialized = True
+        print(f"🎯 Gait phase reward initialized with leg joint indices: {leg_indices}")
+        print(f"   Joint names: {[joint_names[i] for i in leg_indices]}")
+    
+    leg_indices = gait_phase_reward._leg_joint_indices
+    
+    # Get current leg joint positions [num_envs, 10]
+    current_joint_pos = asset.data.joint_pos[:, leg_indices]
+    
+    # Calculate phase in gait cycle for each environment
+    # Use episode time to determine phase
+    time_in_cycle = torch.fmod(env.episode_length_buf.float() * env.step_dt, gait_period)
+    phase_ratio = time_in_cycle / gait_period  # [num_envs], range [0, 1)
+    
+    # Convert phase to keyframe index (0 to 17)
+    keyframe_idx = (phase_ratio * 18.0).long()  # [num_envs]
+    keyframe_idx = torch.clamp(keyframe_idx, 0, 17)  # Ensure valid range
+    
+    # Get reference joint angles for current phase [num_envs, 10]
+    reference_pos = reference_gait_rad[keyframe_idx]
+    
+    # Calculate tracking error
+    # Use mean squared error per joint (averaged across joints) for better scaling
+    joint_diff = current_joint_pos - reference_pos  # [num_envs, 10]
+    mse_per_joint = torch.mean(torch.square(joint_diff), dim=1)  # [num_envs], averaged across 10 joints
+    
+    # Calculate reward using exponential kernel
+    # With std=3.0, mse=1.0 gives reward ≈ 0.90, mse=5.0 gives reward ≈ 0.57
+    reward = torch.exp(-mse_per_joint / (std ** 2))
+    
+    # Debug print for first few calls or every 500 steps
+    if not hasattr(gait_phase_reward, '_debug_count'):
+        gait_phase_reward._debug_count = 0
+    
+    gait_phase_reward._debug_count += 1
+    
+    if gait_phase_reward._debug_count <= 5 or gait_phase_reward._debug_count % 500 == 0:
+        avg_error = mse_per_joint.mean().item()
+        avg_reward = reward.mean().item()
+        max_reward = reward.max().item()
+        min_reward = reward.min().item()
+        avg_phase = phase_ratio.mean().item()
+        
+        print(f"🎯 Gait Reward [{gait_phase_reward._debug_count}] - "
+              f"MSE/joint: {avg_error:.4f}, Reward: {avg_reward:.4f} (min:{min_reward:.4f}, max:{max_reward:.4f}), "
+              f"Phase: {avg_phase:.2f}, Keyframe: {keyframe_idx[0].item()}")
+        
+        if gait_phase_reward._debug_count <= 2:
+            print(f"   Current joints (env 0, deg): {(current_joint_pos[0][:5] * 180/torch.pi).cpu().numpy()}")
+            print(f"   Reference joints (env 0, deg): {(reference_pos[0][:5] * 180/torch.pi).cpu().numpy()}")
+            print(f"   Joint diff (env 0, deg): {(joint_diff[0][:5] * 180/torch.pi).cpu().numpy()}")
+    
+    # Return exponential reward (higher reward for smaller error)
+    return reward
