@@ -5,15 +5,39 @@
 
 """MDP functions for OceanBDX locomotion environment."""
 
-from . import actions, commands, events, observations, rewards, terminations, curriculum
+from . import (
+    actions,
+    commands,
+    events,
+    observations,
+    terminations,
+    curriculum,
+    adaptive_phase_manager,
+    adaptive_rewards,
+    training_curriculum,
+)
 
 # Import specific functions for convenience
 from .actions import *
 from .commands import *
 from .events import *
 from .observations import *
-from .rewards import *
 from .terminations import *
 from .curriculum import *
 
-__all__ = ["actions", "commands", "events", "observations", "rewards", "terminations", "curriculum"]
+# Import adaptive modules (包含所有奖励函数)
+from .adaptive_phase_manager import *
+from .adaptive_rewards import *
+from .training_curriculum import *
+
+__all__ = [
+    "actions",
+    "commands",
+    "events",
+    "observations",
+    "terminations",
+    "curriculum",
+    "adaptive_phase_manager",
+    "adaptive_rewards",
+    "training_curriculum",
+]

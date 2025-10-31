@@ -232,3 +232,55 @@ def gait_phase_observation(env: ManagerBasedEnv, gait_period: float = 0.75) -> t
     ], dim=-1)  # [num_envs, 6]
     
     return phase_encoding
+
+
+def adaptive_gait_phase_observation(env: ManagerBasedEnv) -> torch.Tensor:
+    """
+    自适应步态相位观测（与真机部署完全一致）
+    基于AdaptivePhaseManager生成9维相位特征，根据速度指令动态调整步态参数
+    
+    Args:
+        env: The environment instance (必须有 phase_manager 属性)
+        
+    Returns:
+        Tensor of shape [num_envs, 9] containing:
+        - 6维: sin/cos 多频率编码 (1x, 0.5x, 0.25x)
+        - 1维: phase_rate (归一化的步频 1/period)
+        - 1维: desired_stride (归一化的期望步幅)
+        - 1维: desired_clearance (归一化的期望抬脚高度)
+    
+    Note:
+        - 与训练指南中的相位编码完全一致
+        - 速度越快，步频越高，步幅越大
+        - 为防止作弊振动，提供显式的期望步态参数
+    """
+    # 从环境获取相位管理器，如果不存在则动态创建
+    if not hasattr(env, 'phase_manager'):
+        # 在ObservationManager初始化期间，环境可能还没完全设置
+        # 动态创建一个临时的phase_manager用于维度计算
+        from .adaptive_phase_manager import AdaptivePhaseManager, VideoGaitReference
+        import torch
+        
+        # 尝试从环境配置获取参数
+        try:
+            num_envs = env.num_envs
+            device = env.device
+        except AttributeError:
+            # 如果环境还没初始化这些属性，使用配置或默认值
+            num_envs = getattr(env, 'num_envs', env.cfg.scene.num_envs if hasattr(env, 'cfg') else 16)
+            device = getattr(env, 'device', 'cuda:0')
+        
+        # 创建默认的视频参考配置
+        video_config = VideoGaitReference()
+        
+        env.phase_manager = AdaptivePhaseManager(
+            num_envs=num_envs,
+            device=device,
+            video_config=video_config
+        )
+        print(f"✅ AdaptivePhaseManager auto-created in observation: {num_envs} envs")
+    
+    # 直接使用phase_manager生成观测（已包含所有特征）
+    phase_obs = env.phase_manager.get_phase_observation()
+    
+    return phase_obs

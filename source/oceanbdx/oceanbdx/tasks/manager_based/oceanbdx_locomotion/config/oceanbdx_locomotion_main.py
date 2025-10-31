@@ -116,21 +116,33 @@ class OceanBDXLocomotionSceneCfg(InteractiveSceneCfg):
 
 @configclass
 class CommandsCfg:
-    """Command specifications for the MDP."""
+    """
+    速度命令配置 - 支持三阶段课程学习
+    
+    三阶段速度范围演化：
+    - Stage1 (0-30%): 0-0.35 m/s - 学习稳定站立和基础步态
+    - Stage2 (30-70%): 0-0.5 m/s - 形成完整步态模式
+    - Stage3 (70-100%): 0-0.74 m/s - 优化步态质量和速度
+    
+    注：训练时需要动态调整lin_vel_x范围，参考training_curriculum.py
+    """
 
-    # 【速度命令生成配置】- 控制机器人接收到的运动指令范围
     base_velocity = mdp.UniformVelocityCommandCfg(
         asset_name="robot",
-        resampling_time_range=(15.0, 20.0),  # 【可调】命令重新采样时间间隔(秒)，越长命令越稳定
-        rel_standing_envs=0.1,  # 【可调】静止环境比例(0-1)，0.1=10%环境要求机器人站立不动
-        rel_heading_envs=0.0,   # 【可调】朝向命令环境比例(0-1)，0=不使用朝向命令
-        heading_command=False,  # 【可调】是否启用朝向控制，True=启用转向到特定方向
-        heading_control_stiffness=1.0,  # 【可调】朝向控制刚度，影响转向速度
-        debug_vis=True,  # 【可调】是否显示命令箭头可视化
+        resampling_time_range=(15.0, 20.0),  # 命令重新采样间隔，Stage1可用较长值保持稳定
+        rel_standing_envs=0.2,  # 🎯 Stage1提升到20%静止环境，学习稳定站立
+        rel_heading_envs=0.0,   # 关闭朝向命令，专注直线行走
+        heading_command=False,
+        heading_control_stiffness=1.0,
+        debug_vis=True,
         ranges=mdp.UniformVelocityCommandCfg.Ranges(
-            lin_vel_x=(-1.5, 0.0),   # 🔧 只允许前进：0-1.5m/s，匹配参考步态方向
-            lin_vel_y=(-0.3, 0.3),  # 🔧 减小侧移范围，专注前进训练
-            ang_vel_z=(-0.5, 0.5),  # 保持转向能力
+            # 🎯 Stage1初始范围：只训练低速前进 (0-0.35 m/s)
+            # 训练脚本需要动态调整此范围：
+            # - Stage2: (0.0, 0.5)
+            # - Stage3: (0.0, 0.74)
+            lin_vel_x=(0.0, 0.35),   # � 关键：从Disney BDX参考速度0.35m/s开始
+            lin_vel_y=(-0.1, 0.1),   # 🎯 Stage1限制侧移，Stage3再放宽到(-0.3, 0.3)
+            ang_vel_z=(-0.3, 0.3),   # 🎯 Stage1限制旋转，Stage3再放宽到(-0.5, 0.5)
             heading=(-math.pi, math.pi),
         ),
     )
@@ -202,12 +214,12 @@ class ObservationsCfg:
         # Actions
         last_actions = ObsTerm(func=mdp.last_action)
 
-        # 🆕 【步态相位观测】- 提供显式的时间/相位信息，帮助策略理解步态周期
-        # 多频率编码：[sin(φ), cos(φ), sin(φ/2), cos(φ/2), sin(φ/4), cos(φ/4)]
-        # 提供粗到细的时间尺度信息，与参考步态奖励配合使用
-        gait_phase = ObsTerm(
-            func=mdp.gait_phase_observation,
-            params={"gait_period": 0.75}  # 与参考步态周期一致
+        # 🆕 【自适应步态相位观测】- 根据速度动态调整期望步态参数
+        # 9维观测：6个sin/cos多频率编码 + phase_rate + desired_stride + desired_clearance
+        # 与真机部署完全一致，提供显式的时间/相位信息
+        adaptive_phase = ObsTerm(
+            func=mdp.adaptive_gait_phase_observation
+            # 无需参数，自动从env.phase_manager获取
         )
 
         # Height scan for terrain awareness - 注释：部署时如果没有高度扫描传感器则移除此观测
@@ -268,106 +280,136 @@ class EventsCfg:
 
 @configclass
 class RewardsCfg:
-    """Reward terms for the MDP - Simplified version focusing on gait tracking."""
+    """
+    🎯 Disney BDX自适应奖励系统 - 17个核心奖励函数
+    配合4阶段课程学习 (training_curriculum.py)
+    所有奖励函数来自 adaptive_rewards.py
+    参考: Disney BDX训练指南, legged_gym, walk-these-ways
+    """
 
     # ============================================================================
-    # 【核心奖励】- 基于参考步态的模仿学习
+    # 【任务奖励】(2个) - 让机器人跟踪速度指令
     # ============================================================================
     
-    # 🌟【最重要】参考步态相位跟踪奖励 - 教机器人如何正确地动
-    gait_phase_tracking = RewTerm(
-        func=mdp.gait_phase_reward,
-        weight=5.0,  # 🔧 大幅增加权重到5.0，让步态跟踪成为主导奖励
-        params={
-            "gait_period": 0.75,  # 步态周期0.75秒（与参考轨迹一致）
-            "std": 3.0            # 标准差3.0弧度，容忍初始误差
-        }
+    velocity_tracking = RewTerm(
+        func=mdp.reward_velocity_tracking_exp,
+        weight=2.0,  # 主导奖励,课程会动态调整
+        params={"command_name": "base_velocity", "std": 0.5}
     )
     
-    # ============================================================================
-    # 【任务目标奖励】- 让机器人知道要往哪里走
-    # ============================================================================
-
-    track_lin_vel_xy_exp = RewTerm(
-        func=mdp.track_lin_vel_xy_exp,
-        weight=3.0,  # 🔧 降低到3.0，让步态优先
-        params={"command_name": "base_velocity", "std": math.sqrt(0.25)}
-    )
-
-    track_ang_vel_z_exp = RewTerm(
-        func=mdp.track_ang_vel_z_exp,
-        weight=1.5,  # 🔧 降低到1.5，让步态优先
-        params={"command_name": "base_velocity", "std": math.sqrt(0.25)}
+    angular_velocity_tracking = RewTerm(
+        func=mdp.reward_angular_velocity_tracking,
+        weight=1.0,  # 次要任务奖励
+        params={"command_name": "base_velocity", "std": 0.5}
     )
 
     # ============================================================================
-    # 【稳定性奖励】- 保持直立，防止摔倒
+    # 【稳定性约束】(2个) - 保持直立不摔倒
     # ============================================================================
-
-    upright_posture = RewTerm(
-        func=mdp.upright_posture_reward,
-        weight=2.0  # 🔧 降低到2.0，步态应该自然包含姿态稳定性
+    
+    orientation_penalty = RewTerm(
+        func=mdp.reward_orientation_penalty,
+        weight=-1.0  # Stage 0会提升到-100
     )
     
+    base_height_tracking = RewTerm(
+        func=mdp.reward_base_height_tracking,
+        weight=0.8,  # Stage 0会提升到15.0
+        params={"target_height": 0.35, "std": 0.1}  # 降低目标高度减少膝盖过直
+    )
+
     # ============================================================================
-    # 【安全约束】- 防止危险动作
-    # ============================================================================
-    
-    # 防止Z轴跳跃（必须保留）
-    lin_acc_penalty = RewTerm(func=mdp.lin_vel_z_l2, weight=-1.0)  # 🔧 降低到-1.0
-    
-    # 防止翻滚（必须保留）
-    ang_acc_penalty = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)
-    
-    # ============================================================================
-    # 【平滑性约束】- 保持动作连贯（权重降低）
+    # 【步态质量】(4个) - 🔑 核心防作弊机制
     # ============================================================================
     
-    # 🔧 大幅降低权重，因为参考步态本身就是平滑的
-    joint_torques_l2 = RewTerm(func=mdp.joint_torques_l2, weight=-1e-6)  # 从-5e-6降低到-1e-6
-    joint_acc_l2 = RewTerm(func=mdp.joint_acc_l2, weight=-1e-8)         # 从-5e-8降低到-1e-8
-    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.001)    # 从-0.003降低到-0.001
+    # ⭐ 自适应交替接触 - 防止振动作弊 (改进版:支持过渡相)
+    feet_alternating_contact = RewTerm(
+        func=mdp.reward_feet_alternating_contact,
+        weight=0.0,  # Stage 1: 0.3, Stage 2: 1.0, Stage 3: 0.8
+        params={"threshold": 1.0}
+    )
     
+    # 🆕 重心转移奖励 - 鼓励单腿支撑和抬腿迈步
+    weight_transfer = RewTerm(
+        func=mdp.reward_weight_transfer,
+        weight=0.0,  # Stage 1: 0.5, Stage 2: 1.0, Stage 3: 1.0
+        params={"threshold": 1.0}
+    )
+    
+    # 自适应步长跟踪
+    stride_length_tracking = RewTerm(
+        func=mdp.reward_stride_length_tracking,
+        weight=0.0  # Stage 1: 0.2, Stage 2: 0.8, Stage 3: 0.6
+    )
+    
+    # 自适应抬脚高度
+    foot_clearance = RewTerm(
+        func=mdp.reward_foot_clearance,
+        weight=0.0,  # Stage 1: 0.2, Stage 2: 0.6, Stage 3: 0.4
+        params={"threshold": 1.0}
+    )
+
     # ============================================================================
-    # 【已取消的奖励】- 由步态跟踪隐式提供
+    # 【安全约束】(3个) - 防止危险动作
     # ============================================================================
-    # ❌ track_base_height - 步态隐含了正确高度
-    # ❌ feet_contact_forces - 步态隐含了正确的脚部接触
-    # ❌ gait_pattern - 已经有更精确的phase tracking
-    # ❌ air_time, step_frequency, step_length - 步态定义了运动节奏
     
-    # 【禁用】足部抬起奖励 - 实现有问题，依赖gait_pattern和air_time来控制步态
-    # foot_movement = RewTerm(
-    #     func=mdp.foot_clearance_reward,
-    #     weight=0.0,  # 禁用
-    #     params={"min_clearance": 0.01}
-    # )
+    # 惩罚膝盖、躯干接触地面
+    undesired_contacts = RewTerm(
+        func=mdp.reward_undesired_contacts,
+        weight=-5.0,  # Stage 0: -5.0, Stage 3: -2.0
+        params={"threshold": 1.0}
+    )
     
-    # 【关键可调】腾空时间奖励，使用修复后的平衡摆动奖励
-    # air_time = RewTerm(
-    #     func=mdp.air_time_reward,
-    #     weight=0.3,  # 🔧 降低权重，修复后的算法更安全，避免主导训练
-    #     params={"command_name": "base_velocity", "threshold": 0.1, "min_air_time": 5.0, "target_air_time": 15.0}  # 指数持续时间参数
-    # )
+    # 关节限位惩罚
+    joint_limits_penalty = RewTerm(
+        func=mdp.reward_joint_limits_penalty,
+        weight=-0.1,  # 避免过度主导总奖励
+        params={"soft_limit_ratio": 0.9}
+    )
     
-    # # 【重要可调】步频奖励，鼓励慢而稳的行走节奏，惩罚高频换步
-    # step_frequency = RewTerm(
-    #     func=mdp.step_frequency_penalty,  # 🔧 惩罚函数，内部返回负值
-    #     weight=2.0,  # 🔧 增加权重到2.0，加强对高频步态的抑制
-    #     params={"command_name": "base_velocity", "target_freq": 1.0, "penalty_threshold": 2.0}  # 目标1Hz，超过2Hz开始惩罚（更严格）
-    # )
+    # 支撑腿滑动惩罚
+    feet_slip_penalty = RewTerm(
+        func=mdp.reward_feet_slip_penalty,
+        weight=-1.0,  # Stage 1: -1.0, Stage 2: -1.5, Stage 3: -2.0
+        params={"threshold": 1.0}
+    )
+
+    # ============================================================================
+    # 【能耗与平滑性】(4个) - 🔑 防高频振动作弊
+    # ============================================================================
     
-    # 【新增】步长奖励，鼓励迈大步而不是小碎步
-    # step_length = RewTerm(
-    #     func=mdp.step_length_reward,  # 🔧 步长奖励函数，惩罚小碎步，奖励合理步长
-    #     weight=2.0,  # 🔧 进一步降低权重到1.0，让其作为辅助奖励
-    #     params={
-    #         "command_name": "base_velocity",
-    #         "min_step_length": 0.02,     # 降低最小有效步长到 2cm，更宽松
-    #         "target_step_length": 0.1,  # 降低目标步长到 10cm，更现实
-    #         "max_step_length": 0.3       # 降低最大合理步长到 30cm
-    #     }
-    # )
+    # ⭐ 动作平滑性 - 防止高频振动的关键
+    action_smoothness = RewTerm(
+        func=mdp.reward_action_smoothness,
+        weight=-0.001  # Stage 1: -0.001, Stage 2: -0.01, Stage 3: -0.05
+    )
+    
+    # 关节力矩惩罚（能耗）
+    joint_torque_penalty = RewTerm(
+        func=mdp.reward_joint_torque_penalty,
+        weight=-1e-6  # Stage 1: -1e-6, Stage 2: -5e-5, Stage 3: -1e-4
+    )
+    
+    # ⭐ 关节加速度惩罚 - 防止剧烈运动
+    joint_acceleration = RewTerm(
+        func=mdp.reward_joint_acceleration_penalty,
+        weight=-1e-8  # Stage 1: -1e-8, Stage 2: -2.5e-7, Stage 3: -1e-6
+    )
+    
+    # 关节速度惩罚
+    joint_velocity_penalty = RewTerm(
+        func=mdp.reward_joint_velocity_penalty,
+        weight=-1e-5  # Stage 1: -1e-5, Stage 2: -5e-4, Stage 3: -1e-3
+    )
+
+    # ============================================================================
+    # 【终止惩罚】(1个) - 严厉惩罚摔倒
+    # ============================================================================
+    
+    termination_penalty = RewTerm(
+        func=mdp.reward_termination_penalty,
+        weight=1.0  # 函数内部已乘以-100，总权重-100 to -200
+    )
 
 
 @configclass
@@ -379,12 +421,12 @@ class TerminationsCfg:
     # 【可调】机器人摔倒高度检测
     base_height = DoneTerm(
         func=mdp.base_height,
-        params={"minimum_height": 0.25, "asset_cfg": SceneEntityCfg("robot")},  # 身体低于0.3m时终止
+        params={"minimum_height": 0.15, "asset_cfg": SceneEntityCfg("robot")},  # 🔧 Stage 0: 放宽到0.15m，避免过早终止探索
     )
     # 【重要可调】机器人倾倒角度检测
     base_orientation = DoneTerm(
         func=mdp.bad_orientation,
-        params={"limit_angle": math.pi / 6, "asset_cfg": SceneEntityCfg("robot")},  # 倾斜超过30度终止（更严格）
+        params={"limit_angle": math.pi / 3, "asset_cfg": SceneEntityCfg("robot")},  # 🔧 修复：从30度放宽到60度，给机器人更多学习空间
     )
     # 【新增】膝盖触地终止 - 防止机器人跪倒或摔倒时膝盖撞击地面
     # knee_contact = DoneTerm(
@@ -436,6 +478,26 @@ class OceanBDXLocomotionEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.dt = 0.005  # 仿真步长=200Hz，越小越精确但越慢
         self.sim.physics_material = self.scene.terrain.physics_material
 
+        # ============================================================================
+        # 🔑 自适应步态系统初始化标记
+        # ============================================================================
+        # 注：AdaptivePhaseManager需要在环境构造时手动创建并附加到env实例
+        # 示例代码（需添加到环境类的__init__方法）：
+        #
+        #   from oceanbdx.tasks.manager_based.oceanbdx_locomotion.mdp import AdaptivePhaseManager
+        #
+        #   self.phase_manager = AdaptivePhaseManager(
+        #       num_envs=self.num_envs,
+        #       dt=self.step_dt,  # 控制时间步 = decimation * sim.dt
+        #       device=self.device
+        #   )
+        #
+        # 每个仿真步需要更新：
+        #   self.phase_manager.update(self.robot.data.root_lin_vel_w[:, :2])
+        #
+        # 观测和奖励函数会自动从env.phase_manager获取参数
+        # ============================================================================
+        
         # update sensor update periods
         # we tick all the sensors based on the smallest update period (physics dt)
         # if self.scene.height_scanner is not None:  # 注释：高度扫描传感器已移除

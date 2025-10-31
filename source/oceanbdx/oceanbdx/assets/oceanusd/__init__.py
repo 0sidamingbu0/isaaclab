@@ -34,23 +34,24 @@ OCEAN_ROBOT_CFG = ArticulationCfg(
         pos=(0.0, 0.0, 0.4),  # 调整到合理的初始高度
         rot=(1.0, 0.0, 0.0, 0.0),
         joint_pos={
-            # Left leg joints - 更直立的站立姿态
-            "leg_l1_joint": 0.0,   # hip yaw
-            "leg_l2_joint": 0.0,   # hip pitch - 轻微前倾
-            "leg_l3_joint": 0.0,   # knee pitch - 几乎伸直
-            "leg_l4_joint": 0.0,  # ankle pitch
-            "leg_l5_joint": 0.0,   # ankle roll
-            # Right leg joints - 对称
-            "leg_r1_joint": 0.0,   # hip yaw
-            "leg_r2_joint": 0.0,   # hip pitch
-            "leg_r3_joint": 0.0,   # knee pitch - 几乎伸直
-            "leg_r4_joint": 0.0,  # ankle pitch
-            "leg_r5_joint": 0.0,   # ankle roll
+            # 🎯 Disney BDX标准站立姿态 (从视频分析提取)
+            # Right leg joints
+            "leg_r1_joint": -0.13,  # 大腿yaw = -7.5° (外八字)
+            "leg_r2_joint": -0.07,  # 大腿roll = -4° (髋关节侧向)
+            "leg_r3_joint": -0.20,  # 大腿pitch = -11.5° (髋关节前后，负值=后倾)
+            "leg_r4_joint": -0.052, # 膝关节pitch = -3° (膝盖弯曲)
+            "leg_r5_joint": 0.05,   # 脚pitch = +5.7° (脚尖上翘，重心后移)
+            # Left leg joints
+            "leg_l1_joint": 0.13,   # 大腿yaw = 7.5° (外八字)
+            "leg_l2_joint": 0.07,   # 大腿roll = 4° (髋关节侧向)
+            "leg_l3_joint": 0.20,   # 大腿pitch = 11.5° (髋关节前后，正值=后倾)
+            "leg_l4_joint": 0.052,  # 膝关节pitch = 3° (膝盖弯曲)
+            "leg_l5_joint": -0.05,  # 脚pitch = -5.7° (脚尖上翘，重心后移)
             # Neck joints - 保持中性
-            "neck_n1_joint": 0.0,  # neck yaw
-            "neck_n2_joint": 0.0,  # neck pitch
-            "neck_n3_joint": 0.0,  # neck roll
-            "neck_n4_joint": 0.0,  # head tilt
+            "neck_n1_joint": 0.0,   # neck yaw
+            "neck_n2_joint": 0.0,   # neck pitch
+            "neck_n3_joint": 0.0,   # neck roll
+            "neck_n4_joint": 0.0,   # head tilt
             # IMU joint is fixed, no initial position needed
         },
         joint_vel={
@@ -86,8 +87,8 @@ OCEAN_ROBOT_CFG = ArticulationCfg(
             effort_limit=50.0,  # 大幅增加到100Nm确保有足够力量站立
             saturation_effort=90.0,
             velocity_limit=15.0,  # 大幅提高速度限制
-            stiffness=30.0,  # 🔧 进一步降低刚性，使动作更柔顺（从35.0降到25.0）
-            damping=2.0,   # 🔧 增加阻尼，更强抑制振荡（从3.0增到4.0）
+            stiffness=50.0,  # 🔧 适中刚性避免振荡 (30→50, 提供足够支撑力)
+            damping=4.0,     # 🔧 接近临界阻尼 (2→4, Kp/Kd=12.5:1)
             friction=0.8,
         ),
         "neck": DCMotorCfg(
@@ -98,8 +99,8 @@ OCEAN_ROBOT_CFG = ArticulationCfg(
             effort_limit=10.0,  # 增加颈部力量
             saturation_effort=8.0,
             velocity_limit=10.0,  # 提高颈部速度限制
-            stiffness=8.0,  # 增加颈部刚性
-            damping=2.0,  # 降低阻尼
+            stiffness=15.0,  # 🔧 适中刚性稳定上身 (8→15)
+            damping=1.5,    # 🔧 匹配阻尼比 (Kp/Kd=10:1)
             friction=0.3,
         ),
         # IMU joint is fixed, no actuator needed

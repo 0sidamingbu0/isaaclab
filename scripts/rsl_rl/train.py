@@ -199,6 +199,139 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     dump_pickle(os.path.join(log_dir, "params", "env.pkl"), env_cfg)
     dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
 
+    # ============================================================================
+    # 🎓 三阶段课程学习训练（如果使用OceanBDX任务）
+    # ============================================================================
+    task_lower = args_cli.task.lower()
+    if "oceanbdx" in task_lower or "ocean-bdx" in task_lower or "ocean_bdx" in task_lower:
+        print("\n" + "=" * 80)
+        print(f"🎓 启用Disney BDX三阶段课程学习 (任务: {args_cli.task})")
+        print("=" * 80)
+        
+        # 导入课程学习模块
+        try:
+            from oceanbdx.tasks.manager_based.oceanbdx_locomotion.mdp import TrainingCurriculum
+            
+            curriculum = TrainingCurriculum()
+            
+            # 获取奖励管理器
+            reward_manager = env.unwrapped.reward_manager
+            
+            # 🔧 设置初始Stage 0权重（站立稳定期）
+            initial_weights = curriculum.get_current_weights(0.0)
+            
+            # 直接修改reward_manager的活动项权重
+            for term_name, weight in initial_weights.items():
+                if term_name not in ['velocity_command_range', 'progress_range']:
+                    if hasattr(reward_manager, '_term_names') and term_name in reward_manager._term_names:
+                        idx = reward_manager._term_names.index(term_name)
+                        # _term_cfgs是列表，使用索引访问
+                        reward_manager._term_cfgs[idx].weight = weight
+                        # 强制刷新内部缓存（如果存在）
+                        if hasattr(reward_manager, '_term_weights'):
+                            reward_manager._term_weights[idx] = weight
+            
+            # 验证权重是否生效
+            vel_idx = reward_manager._term_names.index('velocity_tracking')
+            feet_idx = reward_manager._term_names.index('feet_alternating_contact')
+            
+            print(f"\n✅ 已设置Stage 0初始权重（站立稳定期，0-20%）")  # 🔧 修正打印信息
+            print(f"   velocity_tracking 配置: {reward_manager._term_cfgs[vel_idx].weight}")
+            print(f"   feet_alternating_contact 配置: {reward_manager._term_cfgs[feet_idx].weight}")
+            
+            # 调试：打印reward_manager的属性
+            print(f"\n🔍 调试信息：")
+            print(f"   RewardManager类型: {type(reward_manager)}")
+            print(f"   _term_cfgs类型: {type(reward_manager._term_cfgs)}")
+            print(f"   奖励项数量: {len(reward_manager._term_names)}")
+            if hasattr(reward_manager, '_term_weights'):
+                print(f"   velocity_tracking 缓存权重: {reward_manager._term_weights[vel_idx]}")
+            else:
+                print(f"   ⚠️ 没有_term_weights属性")
+            
+            print(f"\n   velocity_command_range: {initial_weights.get('velocity_command_range', 'N/A')}")
+            print(f"   orientation_penalty: {initial_weights['orientation_penalty']}")
+            print(f"   base_height_tracking: {initial_weights['base_height_tracking']}")
+            
+            # 🔧 包装learn方法，动态更新课程权重
+            original_learn = runner.learn
+            
+            def learn_with_curriculum(*args, **kwargs):
+                """包装learn方法以支持课程学习"""
+                # 保存原始参数
+                num_iterations = kwargs.get('num_learning_iterations', args[0] if args else 1000)
+                
+                # 重写runner的log方法以插入权重更新逻辑
+                original_log = runner.log
+                last_stage = -1
+                
+                def log_with_curriculum(locs: dict):
+                    nonlocal last_stage
+                    # 计算训练进度
+                    current_iter = locs.get('it', 0)
+                    progress = current_iter / num_iterations
+                    
+                    # 更新权重（每个iteration都检查）
+                    new_weights = curriculum.get_current_weights(progress)
+                    for term_name, weight in new_weights.items():
+                        if term_name not in ['velocity_command_range', 'progress_range']:
+                            if hasattr(reward_manager, '_term_names') and term_name in reward_manager._term_names:
+                                idx = reward_manager._term_names.index(term_name)
+                                # _term_cfgs是列表，使用索引
+                                reward_manager._term_cfgs[idx].weight = weight
+                                if hasattr(reward_manager, '_term_weights'):
+                                    reward_manager._term_weights[idx] = weight
+                    
+                    # 🔧 关键修复：动态更新velocity command范围！
+                    if 'velocity_command_range' in new_weights:
+                        vel_range = new_weights['velocity_command_range']
+                        command_manager = env.unwrapped.command_manager
+                        if hasattr(command_manager, '_terms') and 'base_velocity' in command_manager._terms:
+                            base_vel_term = command_manager._terms['base_velocity']
+                            if hasattr(base_vel_term, 'cfg'):
+                                # 更新lin_vel_x范围
+                                base_vel_term.cfg.ranges.lin_vel_x = vel_range
+                                # 如果是Stage 0，也需要将其他速度设为0
+                                if vel_range == (0.0, 0.0):
+                                    base_vel_term.cfg.ranges.lin_vel_y = (0.0, 0.0)
+                                    base_vel_term.cfg.ranges.ang_vel_z = (0.0, 0.0)
+                    
+                    # 检测阶段切换
+                    from oceanbdx.tasks.manager_based.oceanbdx_locomotion.mdp import get_current_stage
+                    current_stage = get_current_stage(progress)
+                    if current_stage != last_stage:
+                        last_stage = current_stage
+                        print(f"\n{'='*80}")
+                        print(f"🎓 课程阶段切换: Stage {current_stage} (进度: {progress*100:.1f}%)")
+                        print(f"   velocity_tracking: {new_weights['velocity_tracking']}")
+                        print(f"   feet_alternating_contact: {new_weights['feet_alternating_contact']}")
+                        print(f"   velocity_command_range: {new_weights.get('velocity_command_range', 'N/A')}")
+                        print(f"{'='*80}\n")
+                    
+                    # 调用原始log方法
+                    return original_log(locs)
+                
+                runner.log = log_with_curriculum
+                
+                # 调用原始learn
+                result = original_learn(*args, **kwargs)
+                
+                # 恢复原始log方法
+                runner.log = original_log
+                return result
+            
+            runner.learn = learn_with_curriculum
+            
+            print("\n💡 课程学习已启用：权重将在每次iteration自动更新")
+            print("   Stage 0 (0-5%): 站立稳定 - 不要求移动和抬腿")
+            print("   Stage 1 (5-30%): 学习行走 - 开始速度跟踪")
+            print("   Stage 2 (30-70%): 优化步态 - 引入交替接触")
+            print("   Stage 3 (70-100%): 精细调节 - 能效优化")
+            print("=" * 80 + "\n")
+            
+        except ImportError as e:
+            print(f"⚠️  课程学习模块导入失败，使用标准训练: {e}")
+    
     # run training
     runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
 
