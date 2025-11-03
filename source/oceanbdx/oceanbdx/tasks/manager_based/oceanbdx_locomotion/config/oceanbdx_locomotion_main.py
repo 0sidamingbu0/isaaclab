@@ -117,32 +117,30 @@ class OceanBDXLocomotionSceneCfg(InteractiveSceneCfg):
 @configclass
 class CommandsCfg:
     """
-    速度命令配置 - 支持三阶段课程学习
+    速度命令配置 - 由training_curriculum.py动态控制
     
-    三阶段速度范围演化：
-    - Stage1 (0-30%): 0-0.35 m/s - 学习稳定站立和基础步态
-    - Stage2 (30-70%): 0-0.5 m/s - 形成完整步态模式
-    - Stage3 (70-100%): 0-0.74 m/s - 优化步态质量和速度
+    训练时速度范围由课程调度器动态调整：
+    - Stage 0 (0-20%): 0 m/s - 学习站立平衡
+    - Stage 1 (20-45%): 0-0.35 m/s - 学习基础步态
+    - Stage 2 (45-75%): 0-0.5 m/s - 形成完整步态
+    - Stage 3 (75-100%): 0-0.74 m/s - 优化高速行走
     
-    注：训练时需要动态调整lin_vel_x范围，参考training_curriculum.py
+    注：此处ranges仅作为初始值，训练时会被train.py根据curriculum动态覆盖
     """
 
     base_velocity = mdp.UniformVelocityCommandCfg(
         asset_name="robot",
-        resampling_time_range=(15.0, 20.0),  # 命令重新采样间隔，Stage1可用较长值保持稳定
-        rel_standing_envs=0.2,  # 🎯 Stage1提升到20%静止环境，学习稳定站立
-        rel_heading_envs=0.0,   # 关闭朝向命令，专注直线行走
+        resampling_time_range=(15.0, 20.0),
+        rel_standing_envs=0.2,  # 20%环境保持静止
+        rel_heading_envs=0.0,   # 关闭朝向命令
         heading_command=False,
         heading_control_stiffness=1.0,
         debug_vis=True,
         ranges=mdp.UniformVelocityCommandCfg.Ranges(
-            # 🎯 Stage1初始范围：只训练低速前进 (0-0.35 m/s)
-            # 训练脚本需要动态调整此范围：
-            # - Stage2: (0.0, 0.5)
-            # - Stage3: (0.0, 0.74)
-            lin_vel_x=(0.0, 0.35),   # � 关键：从Disney BDX参考速度0.35m/s开始
-            lin_vel_y=(-0.1, 0.1),   # 🎯 Stage1限制侧移，Stage3再放宽到(-0.3, 0.3)
-            ang_vel_z=(-0.3, 0.3),   # 🎯 Stage1限制旋转，Stage3再放宽到(-0.5, 0.5)
+            # 注意：训练时此初始值会被curriculum覆盖
+            lin_vel_x=(-0.35, 0.0),  # 初始范围（负值=向前），会被动态调整
+            lin_vel_y=(-0.1, 0.1),   # 侧移范围
+            ang_vel_z=(-0.3, 0.3),   # 旋转范围
             heading=(-math.pi, math.pi),
         ),
     )
@@ -418,15 +416,15 @@ class TerminationsCfg:
 
     # 【自动终止】时间到达episode_length_s后自动结束
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
-    # 【可调】机器人摔倒高度检测
+    # 【可调】机器人摔倒高度检测 - 🔧 修复: 提高到0.25m,更早检测趴下
     base_height = DoneTerm(
         func=mdp.base_height,
-        params={"minimum_height": 0.15, "asset_cfg": SceneEntityCfg("robot")},  # 🔧 Stage 0: 放宽到0.15m，避免过早终止探索
+        params={"minimum_height": 0.25, "asset_cfg": SceneEntityCfg("robot")},  # ⬆️ 从0.15提升到0.25m
     )
-    # 【重要可调】机器人倾倒角度检测
+    # 【重要可调】机器人倾倒角度检测 - 🔧 修复: 收紧到45°,防止侧躺
     base_orientation = DoneTerm(
         func=mdp.bad_orientation,
-        params={"limit_angle": math.pi / 3, "asset_cfg": SceneEntityCfg("robot")},  # 🔧 修复：从30度放宽到60度，给机器人更多学习空间
+        params={"limit_angle": math.pi / 4, "asset_cfg": SceneEntityCfg("robot")},  # ⬇️ 从60°收紧到45°
     )
     # 【新增】膝盖触地终止 - 防止机器人跪倒或摔倒时膝盖撞击地面
     # knee_contact = DoneTerm(
