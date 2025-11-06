@@ -1,0 +1,56 @@
+# Copyright (c) 2024-2025 Ocean BDX
+# SPDX-License-Identifier: Apache-2.0
+
+ocean/robot_lab:
+  model_name: "policy.pt"
+  num_observations: 74  # 3+3+14+14+14+3+14+9 = 74 to match model expectations
+  observations:
+    - ang_vel_body     # 3 (base_ang_vel from IMU gyroscope)
+    - gravity_vec      # 3 (projected_gravity from IMU accelerometer)
+    - dof_pos          # 14 (joint_pos_rel)
+    - dof_vel          # 14 (joint_vel_rel)
+    - joint_torques    # 14 (joint_torques)
+    - commands         # 3 (velocity_commands)
+    - actions          # 14 (last_actions)
+    - adaptive_phase   # 9 (adaptive gait phase: 6 multi-freq + 3 parameters)
+  observations_history: [0]  # No history, just current frame
+  observations_history_priority: "time"  # "time" or "term" priority
+  clip_obs: 100.0
+  clip_actions_lower: [-2.0, -2.0, -2.0, -2.0, -2.0,   # Left leg: clip to reasonable range
+                       -2.0, -2.0, -2.0, -2.0, -2.0,   # Right leg: clip to reasonable range
+                       -2.0, -2.0, -2.0, -2.0]         # Neck: clip to reasonable range
+  clip_actions_upper: [2.0, 2.0, 2.0, 2.0, 2.0,        # Left leg: clip to reasonable range
+                       2.0, 2.0, 2.0, 2.0, 2.0,        # Right leg: clip to reasonable range
+                       2.0, 2.0, 2.0, 2.0]             # Neck: clip to reasonable range
+  rl_kp: [50.0, 50.0, 50.0, 50.0, 50.0,      # Left leg (match training)
+          50.0, 50.0, 50.0, 50.0, 50.0,      # Right leg (match training)
+          15.0, 15.0, 15.0, 15.0]            # Neck (match training: 15.0 not 5.0!)
+  rl_kd: [4.0, 4.0, 4.0, 4.0, 4.0,           # Left leg (higher damping for stability)
+          4.0, 4.0, 4.0, 4.0, 4.0,           # Right leg (higher damping for stability)
+          1.5, 1.5, 1.5, 1.5]                # Neck (moderate)
+  fixed_kp: [40.0, 40.0, 40.0, 40.0, 40.0,   # Left leg (backup control)
+             40.0, 40.0, 40.0, 40.0, 40.0,   # Right leg (backup control)
+             10.0, 10.0, 10.0, 10.0]         # Neck (backup control)
+  fixed_kd: [3.5, 3.5, 3.5, 3.5, 3.5,        # Left leg (backup control)
+             3.5, 3.5, 3.5, 3.5, 3.5,        # Right leg (backup control)
+             2.5, 2.5, 2.5, 2.5]             # Neck (backup control)
+  num_of_dofs: 14
+  action_scale: [0.5, 0.5, 0.5, 0.5, 0.5,  # Left leg (MUST match training: 0.5)
+                 0.5, 0.5, 0.5, 0.5, 0.5,  # Right leg (MUST match training: 0.5)
+                 0.5, 0.5, 0.5, 0.5]       # Neck (MUST match training: 0.5)
+  wheel_indices: []
+  lin_vel_scale: 1.0
+  ang_vel_scale: 0.5
+  dof_pos_scale: 1.0
+  dof_vel_scale: 0.05
+  commands_scale: [1.0, 1.0, 1.0]
+  torque_limits: [150.0, 150.0, 150.0, 150.0, 150.0,  # Left leg (increased for stronger movement)
+                  150.0, 150.0, 150.0, 150.0, 150.0,  # Right leg (increased for stronger movement)
+                  15.0, 15.0, 15.0, 15.0]             # Neck (moderate increase)
+  default_dof_pos: [0.13, 0.07, 0.2, 0.052, -0.05,    # Left leg: l1,l2,l3,l4,l5 (TRAINING VALUES!)
+                    -0.13, -0.07, -0.2, -0.052, 0.05,  # Right leg: r1,r2,r3,r4,r5 (TRAINING VALUES!)
+                    0.0, 0.0, 0.0, 0.0]                # Neck: n1,n2,n3,n4 (neutral)
+  # ✅ 移除映射：部署代码关节顺序与训练一致 [L1-L5, R1-R5, N1-N4]
+  # 训练顺序: [L1,L2,L3,L4,L5, R1,R2,R3,R4,R5, N1,N2,N3,N4] (Isaac Lab 字母序)
+  # 部署顺序: [L1,L2,L3,L4,L5, R1,R2,R3,R4,R5, N1,N2,N3,N4] (直接对应)
+  joint_mapping: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
